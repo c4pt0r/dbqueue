@@ -103,6 +103,7 @@ export interface ListTaskOptions {
   status?: TaskStatus;
   assignee?: string;
   limit?: number;
+  all?: boolean;
 }
 
 export async function ensureQueueSchema(
@@ -151,13 +152,15 @@ export function buildListTasksSql(options: ListTaskOptions): string {
   if (options.assignee) {
     clauses.push(`assignee = ${sqlString(options.assignee)}`);
   }
-  const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
+  const limitClause = options.all
+    ? ''
+    : `\n    LIMIT ${Math.max(1, Math.min(options.limit ?? 50, 200))}`;
   return `
     SELECT ${TASK_COLUMNS}
     FROM dbqueue.tasks
     WHERE ${clauses.join(' AND ')}
     ORDER BY id DESC
-    LIMIT ${limit};
+    ${limitClause};
   `;
 }
 

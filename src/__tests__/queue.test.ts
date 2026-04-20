@@ -39,6 +39,15 @@ describe('queue SQL helpers', () => {
     expect(sql).toContain("status = 'in_progress'");
     expect(sql).toContain("assignee = 'worker-1'");
     expect(sql).toContain('LIMIT 200');
+    expect(sql).toContain('ORDER BY id DESC');
+  });
+
+  it('builds list-task SQL without a limit when `all` is requested', () => {
+    const sql = buildListTasksSql({
+      all: true,
+    });
+    expect(sql).toContain('ORDER BY id DESC');
+    expect(sql).not.toContain('LIMIT');
   });
 
   it('builds claim and done SQL against the namespaced schema', () => {

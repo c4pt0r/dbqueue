@@ -48,11 +48,11 @@ The config stores:
 
 ```bash
 npx @c4pt0r/dbqueue init [--name dbqueue] [--token <db9-token>] [--base-url <url>]
-npx @c4pt0r/dbqueue add "ship it" [--payload '{"priority":"high"}']
-npx @c4pt0r/dbqueue list [--status todo|in_progress|done] [--assignee worker-1] [--limit 50]
-npx @c4pt0r/dbqueue claim [--worker worker-1]
-npx @c4pt0r/dbqueue done 42
-npx @c4pt0r/dbqueue show 42
+npx @c4pt0r/dbqueue add "ship it" [--payload '{"priority":"high"}'] [--output table|json]
+npx @c4pt0r/dbqueue list [--status todo|in_progress|done] [--assignee worker-1] [--limit 50 | --all] [--output table|json]
+npx @c4pt0r/dbqueue claim [--worker worker-1] [--output table|json]
+npx @c4pt0r/dbqueue done 42 [--output table|json]
+npx @c4pt0r/dbqueue show 42 [--output table|json]
 ```
 
 ## Schema
@@ -79,4 +79,5 @@ CREATE TABLE IF NOT EXISTS dbqueue.tasks (
 
 - Anonymous mode uses the existing db9 customer endpoints for register/refresh.
 - If the anonymous token expires, `dbqueue` refreshes it from the stored anonymous credentials when possible.
+- `dbqueue list --all` pulls the full result set in one shot. Use it carefully when the queue has more than ~10k rows.
 - A bare `npx dbqueue ...` flow is not available unless the unscoped npm package name is acquired. The currently publishable form is `npx @c4pt0r/dbqueue ...`.

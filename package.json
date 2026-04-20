@@ -1,6 +1,6 @@
 {
   "name": "@c4pt0r/dbqueue",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A simple task queue CLI built on db9 and the official TypeScript SDK.",
   "type": "module",
   "publishConfig": {
