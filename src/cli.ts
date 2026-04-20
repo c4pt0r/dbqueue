@@ -3,7 +3,11 @@ import os from 'node:os';
 import { resolveAuth } from './auth';
 import { loadQueueConfig, saveQueueConfig } from './config';
 import { openDb9Client, resolveDatabaseId } from './db9';
-import { printTask, printTaskTable } from './output';
+import {
+  printClaimResult,
+  printTask,
+  printTaskList,
+} from './output';
 import {
   addTask,
   claimTask,
@@ -14,6 +18,7 @@ import {
   showTask,
 } from './queue';
 import type { QueueConfig, TaskStatus } from './types';
+import type { OutputFormat } from './output';
 
 interface ParsedArgs {
   positionals: string[];
@@ -25,11 +30,11 @@ function printHelp(): void {
 
 Usage:
   dbqueue init [--name dbqueue] [--token <db9-token>] [--base-url <url>]
-  dbqueue add <title> [--payload <json>] [--token <db9-token>] [--db-id <id>]
-  dbqueue list [--status todo|in_progress|done] [--assignee <worker>] [--limit 50]
-  dbqueue claim [--worker <name>]
-  dbqueue done <id>
-  dbqueue show <id>
+  dbqueue add <title> [--payload <json>] [--output table|json] [--token <db9-token>] [--db-id <id>]
+  dbqueue list [--status todo|in_progress|done] [--assignee <worker>] [--limit 50 | --all] [--output table|json]
+  dbqueue claim [--worker <name>] [--output table|json]
+  dbqueue done <id> [--output table|json]
+  dbqueue show <id> [--output table|json]
 
 Auth precedence:
   --token > DB9_QUEUE_TOKEN > DB9_API_KEY > DB9_TOKEN > ~/.db9/credentials > anonymous bootstrap (init only)
@@ -111,6 +116,16 @@ function parsePayload(raw: string | undefined): unknown | undefined {
   }
 }
 
+function parseOutputFormat(raw: string | undefined): OutputFormat {
+  if (!raw || raw === 'table') {
+    return 'table';
+  }
+  if (raw === 'json') {
+    return 'json';
+  }
+  throw new Error('`--output` must be one of: table, json.');
+}
+
 function defaultWorkerName(): string {
   return (
     process.env.DBQUEUE_WORKER?.trim() ||
@@ -175,7 +190,7 @@ async function runAdd(
     title,
     parsePayload(requireFlagString(flags, 'payload'))
   );
-  printTask(task);
+  printTask(task, parseOutputFormat(requireFlagString(flags, 'output')));
 }
 
 async function runList(flags: Record<string, string | true>): Promise<void> {
@@ -189,13 +204,22 @@ async function runList(flags: Record<string, string | true>): Promise<void> {
     config,
     requireFlagString(flags, 'db-id')
   );
+  const output = parseOutputFormat(requireFlagString(flags, 'output'));
+  const all = flags.all === true;
   const limitRaw = requireFlagString(flags, 'limit');
+  if (all && limitRaw) {
+    throw new Error('`--all` and `--limit` are mutually exclusive.');
+  }
   const tasks = await listTasks(client, databaseId, {
     status: parseStatus(requireFlagString(flags, 'status')),
     assignee: requireFlagString(flags, 'assignee'),
-    limit: limitRaw ? requirePositiveInteger(limitRaw, '--limit') : undefined,
+    limit:
+      !all && limitRaw
+        ? requirePositiveInteger(limitRaw, '--limit')
+        : undefined,
+    all,
   });
-  printTaskTable(tasks);
+  printTaskList(tasks, output);
 }
 
 async function runClaim(flags: Record<string, string | true>): Promise<void> {
@@ -210,12 +234,16 @@ async function runClaim(flags: Record<string, string | true>): Promise<void> {
     requireFlagString(flags, 'db-id')
   );
   const worker = requireFlagString(flags, 'worker') ?? defaultWorkerName();
+  const output = parseOutputFormat(requireFlagString(flags, 'output'));
   const task = await claimTask(client, databaseId, worker);
   if (!task) {
-    console.log('No todo tasks are available to claim.');
+    if (output === 'json') {
+      console.error('No todo tasks are available to claim.');
+    }
+    printClaimResult(null, output);
     return;
   }
-  printTask(task);
+  printClaimResult(task, output);
 }
 
 async function runDone(
@@ -241,7 +269,7 @@ async function runDone(
   if (!task) {
     throw new Error(`Task ${id} was not updated. It may not exist.`);
   }
-  printTask(task);
+  printTask(task, parseOutputFormat(requireFlagString(flags, 'output')));
 }
 
 async function runShow(
@@ -267,7 +295,7 @@ async function runShow(
   if (!task) {
     throw new Error(`Task ${id} was not found.`);
   }
-  printTask(task);
+  printTask(task, parseOutputFormat(requireFlagString(flags, 'output')));
 }
 
 async function main(): Promise<void> {
