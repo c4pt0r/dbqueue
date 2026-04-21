@@ -69,6 +69,13 @@ async function writeCredentialRecord(record: Db9CredentialRecord): Promise<void>
   await writeFile(filePath, stringifyToml(serializable), { mode: 0o600 });
 }
 
+export async function saveTokenCredential(token: string): Promise<void> {
+  await writeCredentialRecord({
+    token,
+    is_anonymous: false,
+  });
+}
+
 async function mergeCredentialRecord(
   patch: Partial<Db9CredentialRecord>
 ): Promise<void> {

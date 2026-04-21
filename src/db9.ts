@@ -16,10 +16,13 @@ export async function resolveDatabaseId(
   if (explicitId?.trim()) {
     return explicitId.trim();
   }
+  if (process.env.DB9_QUEUE_DB_ID?.trim()) {
+    return process.env.DB9_QUEUE_DB_ID.trim();
+  }
   if (config?.databaseId) {
     return config.databaseId;
   }
   throw new Error(
-    'No queue database is configured. Run `dbqueue init` first or pass `--db-id`.'
+    'No queue database is configured. Run `dbqueue init` first, pass `--db-id`, or set `DB9_QUEUE_DB_ID`.'
   );
 }

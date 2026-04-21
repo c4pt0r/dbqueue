@@ -1,6 +1,7 @@
 import os from 'node:os';
+import { stdin as input } from 'node:process';
 
-import { resolveAuth } from './auth';
+import { resolveAuth, saveTokenCredential } from './auth';
 import { loadQueueConfig, saveQueueConfig } from './config';
 import { openDb9Client, resolveDatabaseId } from './db9';
 import {
@@ -8,6 +9,7 @@ import {
   printTask,
   printTaskList,
 } from './output';
+import { decodeQueueExportBlob, encodeQueueExportBlob } from './portability';
 import {
   addTask,
   claimTask,
@@ -32,15 +34,21 @@ function printHelp(): void {
 
 Usage:
   dbqueue init [--name dbqueue] [--token <db9-token>] [--base-url <url>]
+  dbqueue init --from <blob|->
   dbqueue add <title> [--payload <json>] [--priority <int>] [--output table|json] [--token <db9-token>] [--db-id <id>]
   dbqueue list [--status todo|in_progress|done] [--assignee <worker>] [--sort id|priority] [--limit 50 | --all] [--output table|json|jsonl]
   dbqueue claim [--worker <name>] [--lease-seconds <sec>] [--wait] [--poll 2s] [--timeout 0] [--output table|json]
   dbqueue reap [--older-than <sec>] [--output table|json]
   dbqueue done <id> [--worker <name>] [--output table|json]
   dbqueue show <id> [--output table|json]
+  dbqueue config export [--token <db9-token>] [--base-url <url>] [--db-id <id>]
 
 Auth precedence:
   --token > DB9_QUEUE_TOKEN > DB9_API_KEY > DB9_TOKEN > ~/.db9/credentials > anonymous bootstrap (init only)
+
+SECURITY:
+  \`dbqueue config export\` emits a credential-bearing blob for token-backed queues.
+  Treat it like a password. Do not paste it into chat/issues.
 `);
 }
 
@@ -174,6 +182,29 @@ function doneWorkerName(flags: Record<string, string | true>): string | undefine
   );
 }
 
+async function readBlobInput(raw: string): Promise<string> {
+  if (raw !== '-') {
+    return raw;
+  }
+
+  const chunks: Buffer[] = [];
+  for await (const chunk of input) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString('utf8').trim();
+}
+
+function assertNoImportFlagOverrides(flags: Record<string, string | true>): void {
+  const incompatible = ['name', 'db-id', 'token', 'base-url'].filter((name) => {
+    return flags[name] !== undefined;
+  });
+  if (incompatible.length > 0) {
+    throw new Error(
+      '`init --from` is mutually exclusive with `--name`, `--db-id`, `--token`, and `--base-url`.'
+    );
+  }
+}
+
 function parseDurationMs(
   raw: string | undefined,
   label: string,
@@ -208,6 +239,38 @@ function parseDurationMs(
 }
 
 async function runInit(flags: Record<string, string | true>): Promise<void> {
+  if (requireFlagString(flags, 'from')) {
+    assertNoImportFlagOverrides(flags);
+    const blob = decodeQueueExportBlob(
+      await readBlobInput(requireFlagString(flags, 'from') as string)
+    );
+    const auth = {
+      token: blob.token,
+      baseUrl: blob.baseUrl,
+      source: 'flag' as const,
+      isAnonymous: false,
+    };
+    const client = openDb9Client(auth);
+    const database = await client.databases.get(blob.databaseId);
+    await ensureQueueSchema(client, database.id);
+    await saveTokenCredential(blob.token);
+    const config: QueueConfig = {
+      version: 1,
+      databaseId: database.id,
+      databaseName: database.name,
+      baseUrl: blob.baseUrl,
+      updatedAt: new Date().toISOString(),
+    };
+    await saveQueueConfig(config);
+
+    console.log('Initialized dbqueue from imported config.');
+    console.log(`database_id: ${database.id}`);
+    console.log(`database_name: ${database.name}`);
+    console.log(`auth_source: imported-token`);
+    console.log(`base_url: ${blob.baseUrl}`);
+    return;
+  }
+
   const auth = await resolveAuth({
     token: requireFlagString(flags, 'token'),
     baseUrl: requireFlagString(flags, 'base-url'),
@@ -237,6 +300,38 @@ async function runInit(flags: Record<string, string | true>): Promise<void> {
   console.log(`database_name: ${database.name}`);
   console.log(`auth_source: ${auth.source}`);
   console.log(`base_url: ${auth.baseUrl}`);
+}
+
+async function runConfigExport(flags: Record<string, string | true>): Promise<void> {
+  const config = await loadQueueConfig();
+  const auth = await resolveAuth({
+    token: requireFlagString(flags, 'token'),
+    baseUrl: requireFlagString(flags, 'base-url') ?? config?.baseUrl,
+  });
+  if (auth.isAnonymous) {
+    throw new Error(
+      'Anonymous-mode queues are one-machine-only. Use a token-backed queue to export/import config.'
+    );
+  }
+  const client = openDb9Client(auth);
+  const databaseId = await resolveDatabaseId(
+    config,
+    requireFlagString(flags, 'db-id')
+  );
+  const database = await client.databases.get(databaseId);
+  const blob = encodeQueueExportBlob({
+    version: 1,
+    mode: 'token',
+    databaseId: database.id,
+    databaseName: database.name,
+    baseUrl: auth.baseUrl,
+    token: auth.token,
+    exportedAt: new Date().toISOString(),
+  });
+  console.error(
+    '# WARNING: this blob contains credentials (token or seed). Treat as a password. Do not paste into chat/issues.'
+  );
+  console.log(blob);
 }
 
 async function runAdd(
@@ -535,6 +630,14 @@ async function main(): Promise<void> {
     case 'show':
       await runShow(parsed.positionals, parsed.flags);
       return;
+    case 'config':
+      if (parsed.positionals[0] === 'export') {
+        await runConfigExport(parsed.flags);
+        return;
+      }
+      throw new Error(
+        'Usage: dbqueue config export [--token <db9-token>] [--base-url <url>] [--db-id <id>]'
+      );
     default:
       throw new Error(`Unknown command: ${command}`);
   }

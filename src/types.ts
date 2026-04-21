@@ -8,6 +8,16 @@ export interface QueueConfig {
   updatedAt: string;
 }
 
+export interface QueueExportBlob {
+  version: 1;
+  mode: 'token';
+  databaseId: string;
+  databaseName: string;
+  baseUrl: string;
+  token: string;
+  exportedAt: string;
+}
+
 export interface Db9CredentialRecord {
   token?: string;
   customer_id?: string;
