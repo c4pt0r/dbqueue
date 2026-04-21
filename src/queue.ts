@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS dbqueue.tasks (
   id BIGSERIAL PRIMARY KEY,
   title TEXT NOT NULL,
   payload JSONB,
+  priority INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'todo',
   assignee TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -21,6 +22,9 @@ CREATE TABLE IF NOT EXISTS dbqueue.tasks (
 ALTER TABLE dbqueue.tasks
   ADD COLUMN IF NOT EXISTS lease_seconds INTEGER;
 
+ALTER TABLE dbqueue.tasks
+  ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 0;
+
 CREATE INDEX IF NOT EXISTS idx_dbqueue_tasks_status
   ON dbqueue.tasks (status, id);
 
@@ -29,12 +33,16 @@ CREATE INDEX IF NOT EXISTS idx_dbqueue_tasks_assignee
 
 CREATE INDEX IF NOT EXISTS idx_dbqueue_tasks_reap
   ON dbqueue.tasks (status, claimed_at);
+
+CREATE INDEX IF NOT EXISTS idx_dbqueue_tasks_claim_order
+  ON dbqueue.tasks (status, priority DESC, id);
 `;
 
 const TASK_COLUMNS = `
   id,
   title,
   payload,
+  priority,
   status,
   assignee,
   lease_seconds,
@@ -105,6 +113,7 @@ function coerceTask(row: Record<string, unknown>): TaskRecord {
     id: Number(row.id),
     title: String(row.title ?? ''),
     payload: normalizePayload(row.payload),
+    priority: Number(row.priority ?? 0),
     status: String(row.status ?? 'todo') as TaskStatus,
     assignee: row.assignee == null ? null : String(row.assignee),
     lease_seconds:
@@ -121,6 +130,7 @@ export interface ListTaskOptions {
   assignee?: string;
   limit?: number;
   all?: boolean;
+  sort?: 'id' | 'priority';
 }
 
 export interface ReapTaskOptions {
@@ -157,10 +167,14 @@ export async function getOrCreateQueueDatabase(
   return client.databases.create({ name: databaseName });
 }
 
-export function buildAddTaskSql(title: string, payload?: unknown): string {
+export function buildAddTaskSql(
+  title: string,
+  payload?: unknown,
+  priority = 0
+): string {
   return `
-    INSERT INTO dbqueue.tasks (title, payload)
-    VALUES (${sqlString(title)}, ${sqlJson(payload)})
+    INSERT INTO dbqueue.tasks (title, payload, priority)
+    VALUES (${sqlString(title)}, ${sqlJson(payload)}, ${priority})
     RETURNING ${TASK_COLUMNS};
   `;
 }
@@ -176,11 +190,15 @@ export function buildListTasksSql(options: ListTaskOptions): string {
   const limitClause = options.all
     ? ''
     : `\n    LIMIT ${Math.max(1, Math.min(options.limit ?? 50, 200))}`;
+  const orderBy =
+    options.sort === 'priority'
+      ? 'priority DESC, id ASC'
+      : 'id DESC';
   return `
     SELECT ${TASK_COLUMNS}
     FROM dbqueue.tasks
     WHERE ${clauses.join(' AND ')}
-    ORDER BY id DESC
+    ORDER BY ${orderBy}
     ${limitClause};
   `;
 }
@@ -194,13 +212,16 @@ export function buildShowTaskSql(id: number): string {
   `;
 }
 
-export function buildDoneTaskSql(id: number): string {
+export function buildDoneTaskSql(id: number, worker?: string): string {
+  const clauses = [`id = ${id}`, `status = 'in_progress'`];
+  if (worker) {
+    clauses.push(`assignee = ${sqlString(worker)}`);
+  }
   return `
     UPDATE dbqueue.tasks
     SET status = 'done',
         completed_at = now()
-    WHERE id = ${id}
-      AND status <> 'done'
+    WHERE ${clauses.join('\n      AND ')}
     RETURNING ${TASK_COLUMNS};
   `;
 }
@@ -219,7 +240,7 @@ export function buildClaimTaskSql(
       SELECT id
       FROM dbqueue.tasks
       WHERE status = 'todo'
-      ORDER BY id
+      ORDER BY priority DESC, id ASC
       LIMIT 1
     )
       AND status = 'todo'
@@ -253,11 +274,12 @@ export async function addTask(
   client: Db9Client,
   databaseId: string,
   title: string,
-  payload?: unknown
+  payload?: unknown,
+  priority = 0
 ): Promise<TaskRecord> {
   const result = await client.databases.sql(
     databaseId,
-    buildAddTaskSql(title, payload)
+    buildAddTaskSql(title, payload, priority)
   );
   assertSqlOk(result, 'Add task');
   const [task] = rowsToObjects(result).map(coerceTask);
@@ -294,9 +316,13 @@ export async function showTask(
 export async function markTaskDone(
   client: Db9Client,
   databaseId: string,
-  id: number
+  id: number,
+  worker?: string
 ): Promise<TaskRecord | null> {
-  const result = await client.databases.sql(databaseId, buildDoneTaskSql(id));
+  const result = await client.databases.sql(
+    databaseId,
+    buildDoneTaskSql(id, worker)
+  );
   assertSqlOk(result, 'Complete task');
   const [task] = rowsToObjects(result).map(coerceTask);
   return task ?? null;

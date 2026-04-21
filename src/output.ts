@@ -46,6 +46,7 @@ function toJsonTask(task: TaskRecord): TaskRecord {
 function printTaskKeyValue(task: TaskRecord): void {
   console.log(`id:          ${task.id}`);
   console.log(`title:       ${task.title}`);
+  console.log(`priority:    ${task.priority}`);
   console.log(`status:      ${task.status}`);
   console.log(`assignee:    ${task.assignee ?? '-'}`);
   console.log(`lease_seconds:${task.lease_seconds == null ? ' -' : ` ${task.lease_seconds}`}`);
@@ -64,6 +65,7 @@ function printTaskTable(tasks: TaskRecord[]): void {
   const rows = tasks.map((task) => ({
     ID: String(task.id),
     TITLE: task.title,
+    PRIORITY: String(task.priority),
     STATUS: task.status,
     ASSIGNEE: task.assignee ?? '-',
     CREATED: formatTimestamp(task.created_at),

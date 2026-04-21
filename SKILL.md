@@ -24,11 +24,11 @@ dbqueue
 
 Usage:
   dbqueue init [--name dbqueue] [--token <db9-token>] [--base-url <url>]
-  dbqueue add <title> [--payload <json>] [--output table|json] [--token <db9-token>] [--db-id <id>]
-  dbqueue list [--status todo|in_progress|done] [--assignee <worker>] [--limit 50 | --all] [--output table|json]
+  dbqueue add <title> [--payload <json>] [--priority <int>] [--output table|json] [--token <db9-token>] [--db-id <id>]
+  dbqueue list [--status todo|in_progress|done] [--assignee <worker>] [--sort id|priority] [--limit 50 | --all] [--output table|json]
   dbqueue claim [--worker <name>] [--lease-seconds <sec>] [--output table|json]
   dbqueue reap [--older-than <sec>] [--output table|json]
-  dbqueue done <id> [--output table|json]
+  dbqueue done <id> [--worker <name>] [--output table|json]
   dbqueue show <id> [--output table|json]
 
 Auth precedence:
@@ -43,12 +43,12 @@ Auth precedence:
 - `add`: enqueue a task with optional JSON payload.
   Canonical example:
   ```bash
-  npx --yes @c4pt0r/dbqueue add "ship docs" --payload '{"priority":"high"}'
+  npx --yes @c4pt0r/dbqueue add "ship docs" --priority 9 --payload '{"kind":"docs"}'
   ```
-- `list`: inspect tasks with optional filters or machine-readable JSON.
+- `list`: inspect tasks with optional filters, explicit sort order, or machine-readable JSON.
   Canonical example:
   ```bash
-  npx --yes @c4pt0r/dbqueue list --all --output json
+  npx --yes @c4pt0r/dbqueue list --status todo --sort priority --output json
   ```
 - `claim`: atomically take one `todo` task and move it to `in_progress`.
   Canonical example:
@@ -63,7 +63,7 @@ Auth precedence:
 - `done`: mark a task complete.
   Canonical example:
   ```bash
-  npx --yes @c4pt0r/dbqueue done 42 --output json
+  npx --yes @c4pt0r/dbqueue done 42 --worker planner-1 --output json
   ```
 - `show`: fetch one task by id.
   Canonical example:
@@ -95,18 +95,19 @@ Human-readable flow:
 
 ```bash
 npx --yes @c4pt0r/dbqueue init --name agent-queue
-npx --yes @c4pt0r/dbqueue add "investigate flaky job"
+npx --yes @c4pt0r/dbqueue add "investigate flaky job" --priority 5
 npx --yes @c4pt0r/dbqueue claim --worker agent-1 --lease-seconds 300
 npx --yes @c4pt0r/dbqueue reap
-npx --yes @c4pt0r/dbqueue done 1
+npx --yes @c4pt0r/dbqueue done 1 --worker agent-1
 ```
 
 Machine-readable flow:
 
 ```bash
 npx --yes @c4pt0r/dbqueue add "triage queue" --payload '{"kind":"ops"}' --output json
-npx --yes @c4pt0r/dbqueue list --status todo --output json | jq
+npx --yes @c4pt0r/dbqueue list --status todo --sort priority --output json | jq
 npx --yes @c4pt0r/dbqueue claim --worker agent-1 --output json | jq
+npx --yes @c4pt0r/dbqueue done 1 --worker agent-1 --output json | jq
 ```
 
 Automation notes:
@@ -114,6 +115,8 @@ Automation notes:
 - Prefer `--output json` when another agent or shell pipeline will consume the result.
 - `claim --output json` is pipe-safe even when the queue is empty: stdout is `{"task": null}` and the human hint stays on stderr.
 - `claim --lease-seconds N` is opt-in. Omit it when the worker wants an indefinite claim.
+- `done --worker <name>` is the safe completion path once leases exist. Without a worker guard, the CLI allows completion of any `in_progress` task and only prints a stderr hint.
+- `DB9_QUEUE_WORKER` can provide a stable non-interactive worker identity for both `claim` and `done`.
 - `list --all` removes the default cap and returns the full result set; use it deliberately.
 
 ## When to use
@@ -126,7 +129,6 @@ Do not use it as a general-purpose database abstraction, document store, or work
 
 V1 limitations:
 
-- No priorities.
 - No watch/subscribe or push notifications.
 - `list --all` loads the full result set in one shot; be careful with very large queues.
 - Queue metadata is stored locally in `~/.dbqueue/config.json`, so a different machine or clean environment does not automatically know which queue database to use.
