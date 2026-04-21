@@ -14,6 +14,8 @@
 - Supports opt-in claim leases via `claim --lease-seconds` and timed recovery via `reap`
 - Supports task priority and priority-aware claiming
 - Supports blocking `claim --wait` polling and streamed `list --all --output jsonl`
+- Supports token-backed queue portability via `config export` / `init --from`
+- Supports stateless operation with `DB9_QUEUE_DB_ID` plus token/base-url env vars
 
 ## Install / Run
 
@@ -47,16 +49,48 @@ The config stores:
 - `baseUrl`
 - `updatedAt`
 
+You can also bypass the local config file completely by supplying:
+
+- `DB9_QUEUE_DB_ID`
+- one of `DB9_QUEUE_TOKEN`, `DB9_API_KEY`, or `DB9_TOKEN`
+- optional `DB9_API_URL`
+
+## Security
+
+`dbqueue config export` emits a credential-bearing blob for token-backed queues.
+Treat it like a password.
+
+Recommended handling:
+
+```bash
+dbqueue config export > ~/dbqueue.blob
+chmod 600 ~/dbqueue.blob
+```
+
+To import that attachment on another machine or clean shell:
+
+```bash
+dbqueue init --from "$(cat ~/dbqueue.blob)"
+```
+
+For fully stateless runs, skip `~/.dbqueue/config.json` entirely:
+
+```bash
+DB9_QUEUE_DB_ID=db_123 DB9_QUEUE_TOKEN="$DB9_QUEUE_TOKEN" dbqueue list --output jsonl
+```
+
 ## Commands
 
 ```bash
 npx @c4pt0r/dbqueue init [--name dbqueue] [--token <db9-token>] [--base-url <url>]
+npx @c4pt0r/dbqueue init --from <blob|->
 npx @c4pt0r/dbqueue add "ship it" [--payload '{"kind":"docs"}'] [--priority 5] [--output table|json]
 npx @c4pt0r/dbqueue list [--status todo|in_progress|done] [--assignee worker-1] [--sort id|priority] [--limit 50 | --all] [--output table|json|jsonl]
 npx @c4pt0r/dbqueue claim [--worker worker-1] [--lease-seconds 300] [--wait] [--poll 2s] [--timeout 0] [--output table|json]
 npx @c4pt0r/dbqueue reap [--older-than 600] [--output table|json]
 npx @c4pt0r/dbqueue done 42 [--worker worker-1] [--output table|json]
 npx @c4pt0r/dbqueue show 42 [--output table|json]
+npx @c4pt0r/dbqueue config export [--token <db9-token>] [--base-url <url>] [--db-id <id>]
 ```
 
 ## Schema
@@ -91,4 +125,10 @@ CREATE TABLE IF NOT EXISTS dbqueue.tasks (
 - `list --sort priority` is opt-in; the default list order remains `id DESC`.
 - `done --worker <name>` guards completion against reclaimed tasks. `DB9_QUEUE_WORKER` can provide the same identity non-interactively.
 - `dbqueue list --all` now pages through the queue internally. `--output jsonl` streams page-by-page; `--output json` still buffers the full result in memory.
+- `config export` / `init --from` are token-backed portability features. Anonymous queues remain one-machine-only.
 - A bare `npx dbqueue ...` flow is not available unless the unscoped npm package name is acquired. The currently publishable form is `npx @c4pt0r/dbqueue ...`.
+
+## Known limitations
+
+- `list --all --output json` still buffers the full result in memory. For very large queues, prefer `--output jsonl`.
+- Anonymous-mode queues are single-machine only. For cross-machine portability, use token mode with `config export` / `init --from` or env-only stateless execution.

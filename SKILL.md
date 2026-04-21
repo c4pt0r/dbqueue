@@ -24,15 +24,21 @@ dbqueue
 
 Usage:
   dbqueue init [--name dbqueue] [--token <db9-token>] [--base-url <url>]
+  dbqueue init --from <blob|->
   dbqueue add <title> [--payload <json>] [--priority <int>] [--output table|json] [--token <db9-token>] [--db-id <id>]
   dbqueue list [--status todo|in_progress|done] [--assignee <worker>] [--sort id|priority] [--limit 50 | --all] [--output table|json|jsonl]
   dbqueue claim [--worker <name>] [--lease-seconds <sec>] [--wait] [--poll 2s] [--timeout 0] [--output table|json]
   dbqueue reap [--older-than <sec>] [--output table|json]
   dbqueue done <id> [--worker <name>] [--output table|json]
   dbqueue show <id> [--output table|json]
+  dbqueue config export [--token <db9-token>] [--base-url <url>] [--db-id <id>]
 
 Auth precedence:
   --token > DB9_QUEUE_TOKEN > DB9_API_KEY > DB9_TOKEN > ~/.db9/credentials > anonymous bootstrap (init only)
+
+SECURITY:
+  `dbqueue config export` emits a credential-bearing blob for token-backed queues.
+  Treat it like a password. Do not paste it into chat/issues.
 ```
 
 - `init`: create or reuse a db9 database and bootstrap the queue schema.
@@ -70,6 +76,11 @@ Auth precedence:
   ```bash
   npx --yes @c4pt0r/dbqueue show 42 --output json
   ```
+- `config export`: export a token-backed queue attachment blob for moving the queue to another machine or shell session.
+  Canonical example:
+  ```bash
+  npx --yes @c4pt0r/dbqueue config export > ~/dbqueue.blob
+  ```
 
 ## Auth precedence
 
@@ -101,6 +112,17 @@ npx --yes @c4pt0r/dbqueue reap
 npx --yes @c4pt0r/dbqueue done 1 --worker agent-1
 ```
 
+Cross-machine token-backed flow:
+
+```bash
+npx --yes @c4pt0r/dbqueue init --token "$DB9_QUEUE_TOKEN"
+npx --yes @c4pt0r/dbqueue config export > ~/dbqueue.blob
+chmod 600 ~/dbqueue.blob
+HOME=$(mktemp -d) npx --yes @c4pt0r/dbqueue init --from "$(cat ~/dbqueue.blob)"
+HOME=$(mktemp -d) DB9_QUEUE_DB_ID=db_123 DB9_QUEUE_TOKEN="$DB9_QUEUE_TOKEN" \
+  npx --yes @c4pt0r/dbqueue list --output jsonl
+```
+
 Machine-readable flow:
 
 ```bash
@@ -120,6 +142,8 @@ Automation notes:
 - `done --worker <name>` is the safe completion path once leases exist. Without a worker guard, the CLI allows completion of any `in_progress` task and only prints a stderr hint.
 - `DB9_QUEUE_WORKER` can provide a stable non-interactive worker identity for both `claim` and `done`.
 - `list --all` removes the default cap and returns the full result set; use it deliberately.
+- `DB9_QUEUE_DB_ID` plus token/base-url env vars gives a stateless mode that does not rely on `~/.dbqueue/config.json`.
+- `config export` includes credentials. Store it in a file with restricted permissions and do not paste it into chat, issues, or logs.
 
 ## When to use
 
@@ -129,8 +153,5 @@ Do not use it as a general-purpose database abstraction, document store, or work
 
 ## Limitations
 
-V1 limitations:
-
 - `list --all --output json` still buffers the full result in memory; for very large queues prefer `--output jsonl` which streams.
-- Queue metadata is stored locally in `~/.dbqueue/config.json`, so a different machine or clean environment does not automatically know which queue database to use.
-- Anonymous identity is stored in `~/.db9/credentials`; a different machine or clean environment gets a different anonymous account and cannot access the old queue unless explicit credentials are supplied.
+- Anonymous-mode queues are single-machine only; for cross-machine portability, use token mode with `config export` / `init --from <blob>` or env-only stateless execution.
