@@ -137,6 +137,11 @@ export interface ReapTaskOptions {
   olderThanSeconds?: number;
 }
 
+export interface ListTaskCursor {
+  id: number;
+  priority: number;
+}
+
 export async function ensureQueueSchema(
   client: Db9Client,
   databaseId: string
@@ -200,6 +205,40 @@ export function buildListTasksSql(options: ListTaskOptions): string {
     WHERE ${clauses.join(' AND ')}
     ORDER BY ${orderBy}
     ${limitClause};
+  `;
+}
+
+export function buildListTaskPageSql(
+  options: Omit<ListTaskOptions, 'limit' | 'all'>,
+  cursor?: ListTaskCursor,
+  pageSize = 500
+): string {
+  const clauses = ['TRUE'];
+  if (options.status) {
+    clauses.push(`status = ${sqlString(options.status)}`);
+  }
+  if (options.assignee) {
+    clauses.push(`assignee = ${sqlString(options.assignee)}`);
+  }
+  if (cursor) {
+    if (options.sort === 'priority') {
+      clauses.push(
+        `(priority < ${cursor.priority} OR (priority = ${cursor.priority} AND id > ${cursor.id}))`
+      );
+    } else {
+      clauses.push(`id < ${cursor.id}`);
+    }
+  }
+  const orderBy =
+    options.sort === 'priority'
+      ? 'priority DESC, id ASC'
+      : 'id DESC';
+  return `
+    SELECT ${TASK_COLUMNS}
+    FROM dbqueue.tasks
+    WHERE ${clauses.join(' AND ')}
+    ORDER BY ${orderBy}
+    LIMIT ${pageSize};
   `;
 }
 
@@ -300,6 +339,40 @@ export async function listTasks(
   );
   assertSqlOk(result, 'List tasks');
   return rowsToObjects(result).map(coerceTask);
+}
+
+export async function streamAllTasks(
+  client: Db9Client,
+  databaseId: string,
+  options: Omit<ListTaskOptions, 'limit' | 'all'>,
+  onPage: (tasks: TaskRecord[]) => Promise<void> | void,
+  pageSize = 500
+): Promise<void> {
+  let cursor: ListTaskCursor | undefined;
+
+  for (;;) {
+    const result = await client.databases.sql(
+      databaseId,
+      buildListTaskPageSql(options, cursor, pageSize)
+    );
+    assertSqlOk(result, 'List tasks');
+    const tasks = rowsToObjects(result).map(coerceTask);
+    if (tasks.length === 0) {
+      return;
+    }
+
+    await onPage(tasks);
+
+    if (tasks.length < pageSize) {
+      return;
+    }
+
+    const last = tasks[tasks.length - 1];
+    cursor = {
+      id: last.id,
+      priority: last.priority,
+    };
+  }
 }
 
 export async function showTask(

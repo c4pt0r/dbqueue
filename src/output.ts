@@ -1,6 +1,7 @@
 import type { TaskRecord } from './types';
 
 export type OutputFormat = 'table' | 'json';
+export type ListOutputFormat = OutputFormat | 'jsonl';
 
 function formatTimestamp(value: string | null): string {
   if (!value) {
@@ -18,6 +19,10 @@ function stringifyPayload(payload: unknown | null): string {
 
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
+}
+
+function printJsonLine(value: unknown): void {
+  console.log(JSON.stringify(value));
 }
 
 function toIsoTimestamp(value: string | null): string | null {
@@ -41,6 +46,12 @@ function toJsonTask(task: TaskRecord): TaskRecord {
     claimed_at: toIsoTimestamp(task.claimed_at),
     completed_at: toIsoTimestamp(task.completed_at),
   };
+}
+
+function printTaskJsonLines(tasks: TaskRecord[]): void {
+  for (const task of tasks) {
+    printJsonLine(toJsonTask(task));
+  }
 }
 
 function printTaskKeyValue(task: TaskRecord): void {
@@ -121,9 +132,13 @@ export function printClaimResult(
   printTaskKeyValue(task);
 }
 
-export function printTaskList(tasks: TaskRecord[], format: OutputFormat): void {
+export function printTaskList(tasks: TaskRecord[], format: ListOutputFormat): void {
   if (format === 'json') {
     printJson({ tasks: tasks.map(toJsonTask) });
+    return;
+  }
+  if (format === 'jsonl') {
+    printTaskJsonLines(tasks);
     return;
   }
   printTaskTable(tasks);

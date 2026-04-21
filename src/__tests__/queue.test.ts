@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAddTaskSql,
   buildClaimTaskSql,
+  buildListTaskPageSql,
   buildDoneTaskSql,
   buildListTasksSql,
   buildReapTasksSql,
@@ -72,6 +73,35 @@ describe('queue SQL helpers', () => {
     });
     expect(sql).toContain('ORDER BY id DESC');
     expect(sql).not.toContain('LIMIT');
+  });
+
+  it('builds paged list SQL with keyset pagination for id order', () => {
+    const sql = buildListTaskPageSql(
+      {
+        status: 'todo',
+        sort: 'id',
+      },
+      { id: 42, priority: 0 },
+      500
+    );
+    expect(sql).toContain("status = 'todo'");
+    expect(sql).toContain('id < 42');
+    expect(sql).toContain('ORDER BY id DESC');
+    expect(sql).toContain('LIMIT 500');
+  });
+
+  it('builds paged list SQL with keyset pagination for priority order', () => {
+    const sql = buildListTaskPageSql(
+      {
+        sort: 'priority',
+      },
+      { id: 42, priority: 9 },
+      500
+    );
+    expect(sql).toContain(
+      '(priority < 9 OR (priority = 9 AND id > 42))'
+    );
+    expect(sql).toContain('ORDER BY priority DESC, id ASC');
   });
 
   it('builds claim SQL with an optional lease value', () => {

@@ -13,6 +13,7 @@
 - Supports `init`, `add`, `list`, `claim`, `reap`, `done`, and `show`
 - Supports opt-in claim leases via `claim --lease-seconds` and timed recovery via `reap`
 - Supports task priority and priority-aware claiming
+- Supports blocking `claim --wait` polling and streamed `list --all --output jsonl`
 
 ## Install / Run
 
@@ -51,8 +52,8 @@ The config stores:
 ```bash
 npx @c4pt0r/dbqueue init [--name dbqueue] [--token <db9-token>] [--base-url <url>]
 npx @c4pt0r/dbqueue add "ship it" [--payload '{"kind":"docs"}'] [--priority 5] [--output table|json]
-npx @c4pt0r/dbqueue list [--status todo|in_progress|done] [--assignee worker-1] [--sort id|priority] [--limit 50 | --all] [--output table|json]
-npx @c4pt0r/dbqueue claim [--worker worker-1] [--lease-seconds 300] [--output table|json]
+npx @c4pt0r/dbqueue list [--status todo|in_progress|done] [--assignee worker-1] [--sort id|priority] [--limit 50 | --all] [--output table|json|jsonl]
+npx @c4pt0r/dbqueue claim [--worker worker-1] [--lease-seconds 300] [--wait] [--poll 2s] [--timeout 0] [--output table|json]
 npx @c4pt0r/dbqueue reap [--older-than 600] [--output table|json]
 npx @c4pt0r/dbqueue done 42 [--worker worker-1] [--output table|json]
 npx @c4pt0r/dbqueue show 42 [--output table|json]
@@ -86,7 +87,8 @@ CREATE TABLE IF NOT EXISTS dbqueue.tasks (
 - If the anonymous token expires, `dbqueue` refreshes it from the stored anonymous credentials when possible.
 - `claim --lease-seconds N` records an opt-in lease; `reap` returns expired `in_progress` tasks to `todo`.
 - `claim` always picks the highest-priority `todo` task first (`priority DESC, id ASC`).
+- `claim --wait` is implemented as client-side polling, not a server push subscription.
 - `list --sort priority` is opt-in; the default list order remains `id DESC`.
 - `done --worker <name>` guards completion against reclaimed tasks. `DB9_QUEUE_WORKER` can provide the same identity non-interactively.
-- `dbqueue list --all` pulls the full result set in one shot. Use it carefully when the queue has more than ~10k rows.
+- `dbqueue list --all` now pages through the queue internally. `--output jsonl` streams page-by-page; `--output json` still buffers the full result in memory.
 - A bare `npx dbqueue ...` flow is not available unless the unscoped npm package name is acquired. The currently publishable form is `npx @c4pt0r/dbqueue ...`.
