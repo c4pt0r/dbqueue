@@ -16,10 +16,11 @@ import {
   listTasks,
   markTaskDone,
   reapTasks,
+  streamAllTasks,
   showTask,
 } from './queue';
 import type { QueueConfig, TaskStatus } from './types';
-import type { OutputFormat } from './output';
+import type { ListOutputFormat, OutputFormat } from './output';
 
 interface ParsedArgs {
   positionals: string[];
@@ -32,8 +33,8 @@ function printHelp(): void {
 Usage:
   dbqueue init [--name dbqueue] [--token <db9-token>] [--base-url <url>]
   dbqueue add <title> [--payload <json>] [--priority <int>] [--output table|json] [--token <db9-token>] [--db-id <id>]
-  dbqueue list [--status todo|in_progress|done] [--assignee <worker>] [--sort id|priority] [--limit 50 | --all] [--output table|json]
-  dbqueue claim [--worker <name>] [--lease-seconds <sec>] [--output table|json]
+  dbqueue list [--status todo|in_progress|done] [--assignee <worker>] [--sort id|priority] [--limit 50 | --all] [--output table|json|jsonl]
+  dbqueue claim [--worker <name>] [--lease-seconds <sec>] [--wait] [--poll 2s] [--timeout 0] [--output table|json]
   dbqueue reap [--older-than <sec>] [--output table|json]
   dbqueue done <id> [--worker <name>] [--output table|json]
   dbqueue show <id> [--output table|json]
@@ -136,6 +137,16 @@ function parseOutputFormat(raw: string | undefined): OutputFormat {
   throw new Error('`--output` must be one of: table, json.');
 }
 
+function parseListOutputFormat(raw: string | undefined): ListOutputFormat {
+  if (!raw || raw === 'table') {
+    return 'table';
+  }
+  if (raw === 'json' || raw === 'jsonl') {
+    return raw;
+  }
+  throw new Error('`--output` must be one of: table, json, jsonl.');
+}
+
 function parseSort(raw: string | undefined): 'id' | 'priority' {
   if (!raw || raw === 'id') {
     return 'id';
@@ -161,6 +172,39 @@ function doneWorkerName(flags: Record<string, string | true>): string | undefine
     process.env.DB9_QUEUE_WORKER?.trim() ??
     process.env.DBQUEUE_WORKER?.trim()
   );
+}
+
+function parseDurationMs(
+  raw: string | undefined,
+  label: string,
+  defaultValueMs: number,
+  options: { allowZero?: boolean } = {}
+): number {
+  if (raw === undefined) {
+    return defaultValueMs;
+  }
+
+  if (raw === '0') {
+    if (options.allowZero) {
+      return 0;
+    }
+    throw new Error(`${label} must be greater than zero.`);
+  }
+
+  const match = raw.match(/^(\d+)(ms|s|m|h)?$/);
+  if (!match) {
+    throw new Error(`${label} must look like 250ms, 2s, 3m, or 1h.`);
+  }
+
+  const value = Number(match[1]);
+  const unit = match[2] ?? 'ms';
+  const factor =
+    unit === 'ms' ? 1 : unit === 's' ? 1000 : unit === 'm' ? 60_000 : 3_600_000;
+  const durationMs = value * factor;
+  if (durationMs <= 0 && !options.allowZero) {
+    throw new Error(`${label} must be greater than zero.`);
+  }
+  return durationMs;
 }
 
 async function runInit(flags: Record<string, string | true>): Promise<void> {
@@ -236,23 +280,57 @@ async function runList(flags: Record<string, string | true>): Promise<void> {
     requireFlagString(flags, 'db-id')
   );
   await ensureQueueSchema(client, databaseId);
-  const output = parseOutputFormat(requireFlagString(flags, 'output'));
+  const output = parseListOutputFormat(requireFlagString(flags, 'output'));
   const all = flags.all === true;
   const limitRaw = requireFlagString(flags, 'limit');
+  const sort = parseSort(requireFlagString(flags, 'sort'));
   if (all && limitRaw) {
     throw new Error('`--all` and `--limit` are mutually exclusive.');
   }
-  const tasks = await listTasks(client, databaseId, {
-    status: parseStatus(requireFlagString(flags, 'status')),
-    assignee: requireFlagString(flags, 'assignee'),
-    sort: parseSort(requireFlagString(flags, 'sort')),
-    limit:
-      !all && limitRaw
+  const status = parseStatus(requireFlagString(flags, 'status'));
+  const assignee = requireFlagString(flags, 'assignee');
+
+  if (!all) {
+    const tasks = await listTasks(client, databaseId, {
+      status,
+      assignee,
+      sort,
+      limit: limitRaw
         ? requirePositiveInteger(limitRaw, '--limit')
         : undefined,
-    all,
-  });
-  printTaskList(tasks, output);
+      all,
+    });
+    printTaskList(tasks, output);
+    return;
+  }
+
+  if (output === 'json') {
+    const tasks: Awaited<ReturnType<typeof listTasks>> = [];
+    await streamAllTasks(
+      client,
+      databaseId,
+      { status, assignee, sort },
+      (page) => {
+        tasks.push(...page);
+      }
+    );
+    printTaskList(tasks, output);
+    return;
+  }
+
+  let sawAny = false;
+  await streamAllTasks(
+    client,
+    databaseId,
+    { status, assignee, sort },
+    (page) => {
+      sawAny = true;
+      printTaskList(page, output);
+    }
+  );
+  if (!sawAny) {
+    printTaskList([], output);
+  }
 }
 
 async function runClaim(flags: Record<string, string | true>): Promise<void> {
@@ -270,18 +348,68 @@ async function runClaim(flags: Record<string, string | true>): Promise<void> {
   const worker = requireFlagString(flags, 'worker') ?? defaultWorkerName();
   const output = parseOutputFormat(requireFlagString(flags, 'output'));
   const leaseRaw = requireFlagString(flags, 'lease-seconds');
-  const task = await claimTask(
-    client,
-    databaseId,
-    worker,
-    leaseRaw ? requirePositiveInteger(leaseRaw, '--lease-seconds') : undefined
+  const leaseSeconds = leaseRaw
+    ? requirePositiveInteger(leaseRaw, '--lease-seconds')
+    : undefined;
+  const wait = flags.wait === true;
+  const pollMs = parseDurationMs(
+    requireFlagString(flags, 'poll'),
+    '--poll',
+    2_000
   );
-  if (!task) {
-    if (output === 'json') {
-      console.error('No todo tasks are available to claim.');
+  const timeoutMs = parseDurationMs(
+    requireFlagString(flags, 'timeout'),
+    '--timeout',
+    0,
+    { allowZero: true }
+  );
+  const deadline = timeoutMs === 0 ? Number.POSITIVE_INFINITY : Date.now() + timeoutMs;
+  let interrupted = false;
+  const onSigint = (): void => {
+    interrupted = true;
+  };
+  process.once('SIGINT', onSigint);
+  let task = null;
+  try {
+    for (;;) {
+      task = await claimTask(
+        client,
+        databaseId,
+        worker,
+        leaseSeconds
+      );
+      if (task || !wait) {
+        break;
+      }
+      if (interrupted) {
+        throw new Error('Interrupted while waiting for a task.');
+      }
+      const now = Date.now();
+      if (now >= deadline) {
+        break;
+      }
+      const sleepMs = Math.min(pollMs, deadline - now);
+      await new Promise((resolve) => setTimeout(resolve, sleepMs));
     }
-    printClaimResult(null, output);
-    return;
+  } finally {
+    process.off('SIGINT', onSigint);
+  }
+  if (!task) {
+    const message = wait
+      ? 'Timed out waiting for todo tasks.'
+      : 'No todo tasks are available to claim.';
+    if (output === 'json') {
+      console.error(message);
+      printClaimResult(null, output);
+      return;
+    }
+    if (wait) {
+      console.log(message);
+      return;
+    } else {
+      printClaimResult(null, output);
+      return;
+    }
   }
   printClaimResult(task, output);
 }

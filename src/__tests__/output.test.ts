@@ -37,6 +37,18 @@ describe('output formatters', () => {
     log.mockRestore();
   });
 
+  it('prints task lists as JSONL when requested', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    printTaskList([task], 'jsonl');
+    expect(log).toHaveBeenCalledWith(
+      JSON.stringify({
+        ...task,
+        created_at: '2026-04-19T18:30:00.000Z',
+      })
+    );
+    log.mockRestore();
+  });
+
   it('prints single tasks as JSON envelopes', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     printTask(task, 'json');
