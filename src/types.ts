@@ -48,6 +48,7 @@ export interface TaskRecord {
   payload: unknown | null;
   status: TaskStatus;
   assignee: string | null;
+  lease_seconds: number | null;
   created_at: string | null;
   claimed_at: string | null;
   completed_at: string | null;

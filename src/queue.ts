@@ -13,15 +13,22 @@ CREATE TABLE IF NOT EXISTS dbqueue.tasks (
   assignee TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   claimed_at TIMESTAMPTZ,
+  lease_seconds INTEGER,
   completed_at TIMESTAMPTZ,
   CHECK (status IN ('todo', 'in_progress', 'done'))
 );
+
+ALTER TABLE dbqueue.tasks
+  ADD COLUMN IF NOT EXISTS lease_seconds INTEGER;
 
 CREATE INDEX IF NOT EXISTS idx_dbqueue_tasks_status
   ON dbqueue.tasks (status, id);
 
 CREATE INDEX IF NOT EXISTS idx_dbqueue_tasks_assignee
   ON dbqueue.tasks (assignee, status, id);
+
+CREATE INDEX IF NOT EXISTS idx_dbqueue_tasks_reap
+  ON dbqueue.tasks (status, claimed_at);
 `;
 
 const TASK_COLUMNS = `
@@ -30,6 +37,7 @@ const TASK_COLUMNS = `
   payload,
   status,
   assignee,
+  lease_seconds,
   created_at,
   claimed_at,
   completed_at
@@ -44,6 +52,13 @@ export function sqlNullableString(value: string | null | undefined): string {
     return 'NULL';
   }
   return sqlString(value);
+}
+
+export function sqlNullableInteger(value: number | null | undefined): string {
+  if (value == null) {
+    return 'NULL';
+  }
+  return String(value);
 }
 
 export function sqlJson(value: unknown | undefined): string {
@@ -92,6 +107,8 @@ function coerceTask(row: Record<string, unknown>): TaskRecord {
     payload: normalizePayload(row.payload),
     status: String(row.status ?? 'todo') as TaskStatus,
     assignee: row.assignee == null ? null : String(row.assignee),
+    lease_seconds:
+      row.lease_seconds == null ? null : Number(row.lease_seconds),
     created_at: row.created_at == null ? null : String(row.created_at),
     claimed_at: row.claimed_at == null ? null : String(row.claimed_at),
     completed_at:
@@ -104,6 +121,10 @@ export interface ListTaskOptions {
   assignee?: string;
   limit?: number;
   all?: boolean;
+}
+
+export interface ReapTaskOptions {
+  olderThanSeconds?: number;
 }
 
 export async function ensureQueueSchema(
@@ -184,11 +205,15 @@ export function buildDoneTaskSql(id: number): string {
   `;
 }
 
-export function buildClaimTaskSql(worker: string): string {
+export function buildClaimTaskSql(
+  worker: string,
+  leaseSeconds?: number
+): string {
   return `
     UPDATE dbqueue.tasks
     SET status = 'in_progress',
         assignee = ${sqlString(worker)},
+        lease_seconds = ${sqlNullableInteger(leaseSeconds)},
         claimed_at = now()
     WHERE id = (
       SELECT id
@@ -198,6 +223,28 @@ export function buildClaimTaskSql(worker: string): string {
       LIMIT 1
     )
       AND status = 'todo'
+    RETURNING ${TASK_COLUMNS};
+  `;
+}
+
+export function buildReapTasksSql(options: ReapTaskOptions = {}): string {
+  const whereClause =
+    options.olderThanSeconds == null
+      ? `status = 'in_progress'
+      AND lease_seconds IS NOT NULL
+      AND claimed_at IS NOT NULL
+      AND claimed_at + make_interval(secs => lease_seconds) < now()`
+      : `status = 'in_progress'
+      AND claimed_at IS NOT NULL
+      AND claimed_at < now() - make_interval(secs => ${options.olderThanSeconds})`;
+
+  return `
+    UPDATE dbqueue.tasks
+    SET status = 'todo',
+        assignee = NULL,
+        claimed_at = NULL,
+        lease_seconds = NULL
+    WHERE ${whereClause}
     RETURNING ${TASK_COLUMNS};
   `;
 }
@@ -265,12 +312,13 @@ export async function claimTask(
   client: Db9Client,
   databaseId: string,
   worker: string,
+  leaseSeconds?: number,
   attempts = 3
 ): Promise<TaskRecord | null> {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const result = await client.databases.sql(
       databaseId,
-      buildClaimTaskSql(worker)
+      buildClaimTaskSql(worker, leaseSeconds)
     );
     assertSqlOk(result, 'Claim task');
     const [task] = rowsToObjects(result).map(coerceTask);
@@ -282,4 +330,17 @@ export async function claimTask(
     }
   }
   return null;
+}
+
+export async function reapTasks(
+  client: Db9Client,
+  databaseId: string,
+  options: ReapTaskOptions = {}
+): Promise<TaskRecord[]> {
+  const result = await client.databases.sql(
+    databaseId,
+    buildReapTasksSql(options)
+  );
+  assertSqlOk(result, 'Reap tasks');
+  return rowsToObjects(result).map(coerceTask);
 }
