@@ -46,6 +46,7 @@ export interface TaskRecord {
   id: number;
   title: string;
   payload: unknown | null;
+  priority: number;
   status: TaskStatus;
   assignee: string | null;
   lease_seconds: number | null;

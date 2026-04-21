@@ -24,8 +24,16 @@ describe('queue SQL helpers', () => {
 
   it('builds add-task SQL with escaped title and json payload', () => {
     const sql = buildAddTaskSql("ship it's done", { ok: true });
-    expect(sql).toContain("VALUES ('ship it''s done', '{\"ok\":true}'::jsonb)");
+    expect(sql).toContain(
+      "VALUES ('ship it''s done', '{\"ok\":true}'::jsonb, 0)"
+    );
+    expect(sql).toContain(', 0)');
     expect(sql).toContain('RETURNING');
+  });
+
+  it('builds add-task SQL with explicit priority', () => {
+    const sql = buildAddTaskSql('urgent', undefined, 9);
+    expect(sql).toContain("VALUES ('urgent', NULL, 9)");
   });
 
   it('serializes null payloads as SQL NULL', () => {
@@ -50,6 +58,14 @@ describe('queue SQL helpers', () => {
     expect(sql).toContain('ORDER BY id DESC');
   });
 
+  it('builds list-task SQL with priority ordering when requested', () => {
+    const sql = buildListTasksSql({
+      sort: 'priority',
+      limit: 50,
+    });
+    expect(sql).toContain('ORDER BY priority DESC, id ASC');
+  });
+
   it('builds list-task SQL without a limit when `all` is requested', () => {
     const sql = buildListTasksSql({
       all: true,
@@ -62,6 +78,9 @@ describe('queue SQL helpers', () => {
     expect(buildClaimTaskSql('worker-1')).toContain('lease_seconds = NULL');
     expect(buildClaimTaskSql('worker-1', 120)).toContain(
       'lease_seconds = 120'
+    );
+    expect(buildClaimTaskSql('worker-1')).toContain(
+      'ORDER BY priority DESC, id ASC'
     );
     expect(buildClaimTaskSql('worker-1')).toContain('UPDATE dbqueue.tasks');
   });
@@ -77,6 +96,10 @@ describe('queue SQL helpers', () => {
   });
 
   it('builds done SQL against the namespaced schema', () => {
+    expect(buildDoneTaskSql(42)).toContain("status = 'in_progress'");
+    expect(buildDoneTaskSql(42, 'worker-1')).toContain(
+      "assignee = 'worker-1'"
+    );
     expect(buildDoneTaskSql(42)).toContain('WHERE id = 42');
   });
 });

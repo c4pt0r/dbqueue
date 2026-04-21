@@ -31,11 +31,11 @@ function printHelp(): void {
 
 Usage:
   dbqueue init [--name dbqueue] [--token <db9-token>] [--base-url <url>]
-  dbqueue add <title> [--payload <json>] [--output table|json] [--token <db9-token>] [--db-id <id>]
-  dbqueue list [--status todo|in_progress|done] [--assignee <worker>] [--limit 50 | --all] [--output table|json]
+  dbqueue add <title> [--payload <json>] [--priority <int>] [--output table|json] [--token <db9-token>] [--db-id <id>]
+  dbqueue list [--status todo|in_progress|done] [--assignee <worker>] [--sort id|priority] [--limit 50 | --all] [--output table|json]
   dbqueue claim [--worker <name>] [--lease-seconds <sec>] [--output table|json]
   dbqueue reap [--older-than <sec>] [--output table|json]
-  dbqueue done <id> [--output table|json]
+  dbqueue done <id> [--worker <name>] [--output table|json]
   dbqueue show <id> [--output table|json]
 
 Auth precedence:
@@ -93,6 +93,14 @@ function requirePositiveInteger(raw: string, label: string): number {
   return parsed;
 }
 
+function requireInteger(raw: string, label: string): number {
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed)) {
+    throw new Error(`${label} must be an integer.`);
+  }
+  return parsed;
+}
+
 function parseStatus(raw: string | undefined): TaskStatus | undefined {
   if (!raw) {
     return undefined;
@@ -128,11 +136,30 @@ function parseOutputFormat(raw: string | undefined): OutputFormat {
   throw new Error('`--output` must be one of: table, json.');
 }
 
+function parseSort(raw: string | undefined): 'id' | 'priority' {
+  if (!raw || raw === 'id') {
+    return 'id';
+  }
+  if (raw === 'priority') {
+    return 'priority';
+  }
+  throw new Error('`--sort` must be one of: id, priority.');
+}
+
 function defaultWorkerName(): string {
   return (
+    process.env.DB9_QUEUE_WORKER?.trim() ||
     process.env.DBQUEUE_WORKER?.trim() ||
     process.env.USER?.trim() ||
     os.hostname()
+  );
+}
+
+function doneWorkerName(flags: Record<string, string | true>): string | undefined {
+  return (
+    requireFlagString(flags, 'worker') ??
+    process.env.DB9_QUEUE_WORKER?.trim() ??
+    process.env.DBQUEUE_WORKER?.trim()
   );
 }
 
@@ -191,7 +218,8 @@ async function runAdd(
     client,
     databaseId,
     title,
-    parsePayload(requireFlagString(flags, 'payload'))
+    parsePayload(requireFlagString(flags, 'payload')),
+    requireInteger(requireFlagString(flags, 'priority') ?? '0', '--priority')
   );
   printTask(task, parseOutputFormat(requireFlagString(flags, 'output')));
 }
@@ -217,6 +245,7 @@ async function runList(flags: Record<string, string | true>): Promise<void> {
   const tasks = await listTasks(client, databaseId, {
     status: parseStatus(requireFlagString(flags, 'status')),
     assignee: requireFlagString(flags, 'assignee'),
+    sort: parseSort(requireFlagString(flags, 'sort')),
     limit:
       !all && limitRaw
         ? requirePositiveInteger(limitRaw, '--limit')
@@ -299,11 +328,25 @@ async function runDone(
     requireFlagString(flags, 'db-id')
   );
   await ensureQueueSchema(client, databaseId);
-  const task = await markTaskDone(client, databaseId, id);
-  if (!task) {
-    throw new Error(`Task ${id} was not updated. It may not exist.`);
+  const output = parseOutputFormat(requireFlagString(flags, 'output'));
+  const worker = doneWorkerName(flags);
+  if (!worker) {
+    console.error(
+      '# hint: pass --worker/$DB9_QUEUE_WORKER to guard against reclaimed tasks'
+    );
   }
-  printTask(task, parseOutputFormat(requireFlagString(flags, 'output')));
+  const task = await markTaskDone(client, databaseId, id, worker);
+  if (!task) {
+    if (worker) {
+      throw new Error(
+        `done failed: task ${id} not claimed by ${worker} (may be reclaimed or already done)`
+      );
+    }
+    throw new Error(
+      `Task ${id} was not updated. It may already be done or not be in progress.`
+    );
+  }
+  printTask(task, output);
 }
 
 async function runShow(

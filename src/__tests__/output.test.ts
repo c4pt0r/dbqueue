@@ -7,6 +7,7 @@ const task: TaskRecord = {
   id: 7,
   title: 'ship it',
   payload: { priority: 'high' },
+  priority: 5,
   status: 'todo',
   assignee: null,
   lease_seconds: null,
