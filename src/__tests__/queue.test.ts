@@ -5,7 +5,9 @@ import {
   buildClaimTaskSql,
   buildDoneTaskSql,
   buildListTasksSql,
+  buildReapTasksSql,
   sqlJson,
+  sqlNullableInteger,
   sqlString,
 } from '../queue';
 
@@ -30,6 +32,12 @@ describe('queue SQL helpers', () => {
     expect(sqlJson(undefined)).toBe('NULL');
   });
 
+  it('serializes nullable integers as SQL literals', () => {
+    expect(sqlNullableInteger(120)).toBe('120');
+    expect(sqlNullableInteger(null)).toBe('NULL');
+    expect(sqlNullableInteger(undefined)).toBe('NULL');
+  });
+
   it('builds list-task SQL with optional filters and bounded limit', () => {
     const sql = buildListTasksSql({
       status: 'in_progress',
@@ -50,8 +58,25 @@ describe('queue SQL helpers', () => {
     expect(sql).not.toContain('LIMIT');
   });
 
-  it('builds claim and done SQL against the namespaced schema', () => {
+  it('builds claim SQL with an optional lease value', () => {
+    expect(buildClaimTaskSql('worker-1')).toContain('lease_seconds = NULL');
+    expect(buildClaimTaskSql('worker-1', 120)).toContain(
+      'lease_seconds = 120'
+    );
     expect(buildClaimTaskSql('worker-1')).toContain('UPDATE dbqueue.tasks');
+  });
+
+  it('builds reap SQL for leased or explicitly stale tasks', () => {
+    expect(buildReapTasksSql()).toContain('lease_seconds IS NOT NULL');
+    expect(buildReapTasksSql()).toContain(
+      'claimed_at + make_interval(secs => lease_seconds) < now()'
+    );
+    expect(buildReapTasksSql({ olderThanSeconds: 30 })).toContain(
+      'claimed_at < now() - make_interval(secs => 30)'
+    );
+  });
+
+  it('builds done SQL against the namespaced schema', () => {
     expect(buildDoneTaskSql(42)).toContain('WHERE id = 42');
   });
 });

@@ -48,6 +48,7 @@ function printTaskKeyValue(task: TaskRecord): void {
   console.log(`title:       ${task.title}`);
   console.log(`status:      ${task.status}`);
   console.log(`assignee:    ${task.assignee ?? '-'}`);
+  console.log(`lease_seconds:${task.lease_seconds == null ? ' -' : ` ${task.lease_seconds}`}`);
   console.log(`created_at:  ${formatTimestamp(task.created_at)}`);
   console.log(`claimed_at:  ${formatTimestamp(task.claimed_at)}`);
   console.log(`completed_at:${task.completed_at ? ` ${formatTimestamp(task.completed_at)}` : ' -'}`);

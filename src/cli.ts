@@ -15,6 +15,7 @@ import {
   getOrCreateQueueDatabase,
   listTasks,
   markTaskDone,
+  reapTasks,
   showTask,
 } from './queue';
 import type { QueueConfig, TaskStatus } from './types';
@@ -32,7 +33,8 @@ Usage:
   dbqueue init [--name dbqueue] [--token <db9-token>] [--base-url <url>]
   dbqueue add <title> [--payload <json>] [--output table|json] [--token <db9-token>] [--db-id <id>]
   dbqueue list [--status todo|in_progress|done] [--assignee <worker>] [--limit 50 | --all] [--output table|json]
-  dbqueue claim [--worker <name>] [--output table|json]
+  dbqueue claim [--worker <name>] [--lease-seconds <sec>] [--output table|json]
+  dbqueue reap [--older-than <sec>] [--output table|json]
   dbqueue done <id> [--output table|json]
   dbqueue show <id> [--output table|json]
 
@@ -184,6 +186,7 @@ async function runAdd(
     config,
     requireFlagString(flags, 'db-id')
   );
+  await ensureQueueSchema(client, databaseId);
   const task = await addTask(
     client,
     databaseId,
@@ -204,6 +207,7 @@ async function runList(flags: Record<string, string | true>): Promise<void> {
     config,
     requireFlagString(flags, 'db-id')
   );
+  await ensureQueueSchema(client, databaseId);
   const output = parseOutputFormat(requireFlagString(flags, 'output'));
   const all = flags.all === true;
   const limitRaw = requireFlagString(flags, 'limit');
@@ -233,9 +237,16 @@ async function runClaim(flags: Record<string, string | true>): Promise<void> {
     config,
     requireFlagString(flags, 'db-id')
   );
+  await ensureQueueSchema(client, databaseId);
   const worker = requireFlagString(flags, 'worker') ?? defaultWorkerName();
   const output = parseOutputFormat(requireFlagString(flags, 'output'));
-  const task = await claimTask(client, databaseId, worker);
+  const leaseRaw = requireFlagString(flags, 'lease-seconds');
+  const task = await claimTask(
+    client,
+    databaseId,
+    worker,
+    leaseRaw ? requirePositiveInteger(leaseRaw, '--lease-seconds') : undefined
+  );
   if (!task) {
     if (output === 'json') {
       console.error('No todo tasks are available to claim.');
@@ -244,6 +255,28 @@ async function runClaim(flags: Record<string, string | true>): Promise<void> {
     return;
   }
   printClaimResult(task, output);
+}
+
+async function runReap(flags: Record<string, string | true>): Promise<void> {
+  const config = await loadQueueConfig();
+  const auth = await resolveAuth({
+    token: requireFlagString(flags, 'token'),
+    baseUrl: requireFlagString(flags, 'base-url') ?? config?.baseUrl,
+  });
+  const client = openDb9Client(auth);
+  const databaseId = await resolveDatabaseId(
+    config,
+    requireFlagString(flags, 'db-id')
+  );
+  await ensureQueueSchema(client, databaseId);
+  const output = parseOutputFormat(requireFlagString(flags, 'output'));
+  const olderThanRaw = requireFlagString(flags, 'older-than');
+  const tasks = await reapTasks(client, databaseId, {
+    olderThanSeconds: olderThanRaw
+      ? requirePositiveInteger(olderThanRaw, '--older-than')
+      : undefined,
+  });
+  printTaskList(tasks, output);
 }
 
 async function runDone(
@@ -265,6 +298,7 @@ async function runDone(
     config,
     requireFlagString(flags, 'db-id')
   );
+  await ensureQueueSchema(client, databaseId);
   const task = await markTaskDone(client, databaseId, id);
   if (!task) {
     throw new Error(`Task ${id} was not updated. It may not exist.`);
@@ -291,6 +325,7 @@ async function runShow(
     config,
     requireFlagString(flags, 'db-id')
   );
+  await ensureQueueSchema(client, databaseId);
   const task = await showTask(client, databaseId, id);
   if (!task) {
     throw new Error(`Task ${id} was not found.`);
@@ -319,6 +354,9 @@ async function main(): Promise<void> {
       return;
     case 'claim':
       await runClaim(parsed.flags);
+      return;
+    case 'reap':
+      await runReap(parsed.flags);
       return;
     case 'done':
       await runDone(parsed.positionals, parsed.flags);

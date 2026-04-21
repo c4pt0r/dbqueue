@@ -10,7 +10,8 @@
 - Works with an explicit db9 API token or shared db9 CLI credentials
 - Can bootstrap an anonymous db9 account when no credentials exist
 - Creates or reuses a db9 database and manages a namespaced queue schema
-- Supports `init`, `add`, `list`, `claim`, `done`, and `show`
+- Supports `init`, `add`, `list`, `claim`, `reap`, `done`, and `show`
+- Supports opt-in claim leases via `claim --lease-seconds` and timed recovery via `reap`
 
 ## Install / Run
 
@@ -50,7 +51,8 @@ The config stores:
 npx @c4pt0r/dbqueue init [--name dbqueue] [--token <db9-token>] [--base-url <url>]
 npx @c4pt0r/dbqueue add "ship it" [--payload '{"priority":"high"}'] [--output table|json]
 npx @c4pt0r/dbqueue list [--status todo|in_progress|done] [--assignee worker-1] [--limit 50 | --all] [--output table|json]
-npx @c4pt0r/dbqueue claim [--worker worker-1] [--output table|json]
+npx @c4pt0r/dbqueue claim [--worker worker-1] [--lease-seconds 300] [--output table|json]
+npx @c4pt0r/dbqueue reap [--older-than 600] [--output table|json]
 npx @c4pt0r/dbqueue done 42 [--output table|json]
 npx @c4pt0r/dbqueue show 42 [--output table|json]
 ```
@@ -70,6 +72,7 @@ CREATE TABLE IF NOT EXISTS dbqueue.tasks (
   assignee TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   claimed_at TIMESTAMPTZ,
+  lease_seconds INTEGER,
   completed_at TIMESTAMPTZ,
   CHECK (status IN ('todo', 'in_progress', 'done'))
 );
@@ -79,5 +82,6 @@ CREATE TABLE IF NOT EXISTS dbqueue.tasks (
 
 - Anonymous mode uses the existing db9 customer endpoints for register/refresh.
 - If the anonymous token expires, `dbqueue` refreshes it from the stored anonymous credentials when possible.
+- `claim --lease-seconds N` records an opt-in lease; `reap` returns expired `in_progress` tasks to `todo`.
 - `dbqueue list --all` pulls the full result set in one shot. Use it carefully when the queue has more than ~10k rows.
 - A bare `npx dbqueue ...` flow is not available unless the unscoped npm package name is acquired. The currently publishable form is `npx @c4pt0r/dbqueue ...`.

@@ -26,7 +26,8 @@ Usage:
   dbqueue init [--name dbqueue] [--token <db9-token>] [--base-url <url>]
   dbqueue add <title> [--payload <json>] [--output table|json] [--token <db9-token>] [--db-id <id>]
   dbqueue list [--status todo|in_progress|done] [--assignee <worker>] [--limit 50 | --all] [--output table|json]
-  dbqueue claim [--worker <name>] [--output table|json]
+  dbqueue claim [--worker <name>] [--lease-seconds <sec>] [--output table|json]
+  dbqueue reap [--older-than <sec>] [--output table|json]
   dbqueue done <id> [--output table|json]
   dbqueue show <id> [--output table|json]
 
@@ -52,7 +53,12 @@ Auth precedence:
 - `claim`: atomically take one `todo` task and move it to `in_progress`.
   Canonical example:
   ```bash
-  npx --yes @c4pt0r/dbqueue claim --worker planner-1 --output json
+  npx --yes @c4pt0r/dbqueue claim --worker planner-1 --lease-seconds 300 --output json
+  ```
+- `reap`: move expired `in_progress` tasks back to `todo`.
+  Canonical example:
+  ```bash
+  npx --yes @c4pt0r/dbqueue reap --output json
   ```
 - `done`: mark a task complete.
   Canonical example:
@@ -90,7 +96,8 @@ Human-readable flow:
 ```bash
 npx --yes @c4pt0r/dbqueue init --name agent-queue
 npx --yes @c4pt0r/dbqueue add "investigate flaky job"
-npx --yes @c4pt0r/dbqueue claim --worker agent-1
+npx --yes @c4pt0r/dbqueue claim --worker agent-1 --lease-seconds 300
+npx --yes @c4pt0r/dbqueue reap
 npx --yes @c4pt0r/dbqueue done 1
 ```
 
@@ -106,6 +113,7 @@ Automation notes:
 
 - Prefer `--output json` when another agent or shell pipeline will consume the result.
 - `claim --output json` is pipe-safe even when the queue is empty: stdout is `{"task": null}` and the human hint stays on stderr.
+- `claim --lease-seconds N` is opt-in. Omit it when the worker wants an indefinite claim.
 - `list --all` removes the default cap and returns the full result set; use it deliberately.
 
 ## When to use
@@ -118,7 +126,6 @@ Do not use it as a general-purpose database abstraction, document store, or work
 
 V1 limitations:
 
-- No visibility timeout or lease expiry for claimed tasks.
 - No priorities.
 - No watch/subscribe or push notifications.
 - `list --all` loads the full result set in one shot; be careful with very large queues.

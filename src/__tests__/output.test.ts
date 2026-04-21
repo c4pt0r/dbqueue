@@ -9,6 +9,7 @@ const task: TaskRecord = {
   payload: { priority: 'high' },
   status: 'todo',
   assignee: null,
+  lease_seconds: null,
   created_at: '2026-04-19T18:30:00Z',
   claimed_at: null,
   completed_at: null,
